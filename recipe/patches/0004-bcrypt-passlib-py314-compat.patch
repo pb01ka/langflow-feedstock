@@ -1,0 +1,53 @@
+--- a/src/backend/base/pyproject.toml
++++ b/src/backend/base/pyproject.toml
+@@ -43,7 +43,7 @@
+     "orjson>=3.11.6,<4.0.0",
+     "alembic>=1.13.0,<2.0.0",
+     "passlib>=1.7.4,<2.0.0",
+-    "bcrypt==4.0.1",
++    "bcrypt>=4.3.0,<6.0.0",
+     "pillow>=12.1.1,<13.0.0",
+     "docstring-parser>=0.16,<1.0.0",
+     "PyJWT>=2.12.1",
+--- a/src/lfx/src/lfx/services/settings/auth.py
++++ b/src/lfx/src/lfx/services/settings/auth.py
+@@ -4,6 +4,7 @@
+ from typing import Literal
+ from urllib.parse import urlparse
+ 
++import bcrypt
+ from passlib.context import CryptContext
+ from pydantic import Field, SecretStr, field_validator, model_validator
+ from pydantic_settings import BaseSettings, SettingsConfigDict
+@@ -22,8 +23,31 @@
+     write_public_key_to_file,
+     write_secret_to_file,
+ )
++
++
++# passlib (unmaintained since 2020) was written against bcrypt's pre-4.1 behavior
++# of silently truncating secrets over 72 bytes. Modern bcrypt (>=4.1) raises
++# ValueError instead, which breaks passlib's CryptContext the first time it hashes
++# or verifies anything -- including detect_wrap_bug()'s own internal self-test, so
++# this fires on startup before any real password is touched. bcrypt's cipher only
++# ever consumes the first 72 bytes of a secret regardless, so pre-truncating here
++# reproduces exactly the hash bcrypt would have produced anyway; it does not change
++# what gets hashed for any password bcrypt actually uses.
++def _bcrypt_truncate_72(secret: bytes) -> bytes:
++    return secret[:72] if len(secret) > 72 else secret
+ 
+ 
++if not hasattr(bcrypt, "__about__"):
++    import types
++
++    bcrypt.__about__ = types.SimpleNamespace(__version__=bcrypt.__version__)
++
++_bcrypt_hashpw = bcrypt.hashpw
++_bcrypt_checkpw = bcrypt.checkpw
++bcrypt.hashpw = lambda password, salt: _bcrypt_hashpw(_bcrypt_truncate_72(password), salt)
++bcrypt.checkpw = lambda password, hashed: _bcrypt_checkpw(_bcrypt_truncate_72(password), hashed)
++
++
+ def _warn_if_secret_key_is_short(value: str | SecretStr) -> None:
+     secret_value = value.get_secret_value() if isinstance(value, SecretStr) else value
+     if len(secret_value) < MINIMUM_SECRET_KEY_LENGTH:

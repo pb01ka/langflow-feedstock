@@ -28,6 +28,7 @@ source:
     - patches/0001-strip-integration-deps.patch
     - patches/0002-lean-umbrella-deps.patch
     - patches/0003-strip-ibm-db-dep.patch
+    - patches/0004-bcrypt-passlib-py314-compat.patch
 
 build:
   number: 0
@@ -129,6 +130,14 @@ outputs:
         - beautifulsoup4 >=4.12.3,<5.0.0
       run_constraints:
         - magika >=0.6.1,!=0.6.3,<0.7.0
+        # markitdown's conda-forge build unconditionally pulls in its Azure Document
+        # Intelligence extra (azure-identity -> msal -> msal-extensions), unlike the
+        # lean PyPI wheel where that's opt-in. Nothing constrains msal-extensions to a
+        # recent build, so the solver is free to pick the ancient 0.3.0 -- which pins
+        # portalocker~=1.0 and conflicts with newer portalocker pulled in elsewhere,
+        # failing pip_check. Forcing a modern msal-extensions (whose own portalocker
+        # need is just an optional extra, not a hard pin) resolves the conflict.
+        - msal_extensions >=1.2.0
     tests:
       - python:
           imports:
@@ -136,6 +145,7 @@ outputs:
           pip_check: true
           python_version:
             - ${{ python_min }}.*
+            - "3.14.*"
 
   - package:
       name: lfx-duckduckgo
@@ -325,7 +335,11 @@ outputs:
         - orjson >=3.11.6,<4.0.0
         - alembic >=1.13.0,<2.0.0
         - passlib >=1.7.4,<2.0.0
-        - bcrypt ==4.0.1
+        # patches/0004-bcrypt-passlib-py314-compat.patch relaxes upstream's
+        # bcrypt==4.0.1 exact pin (needed to keep passlib -- unmaintained
+        # since 2020 -- working; see that patch for the compat shim) and
+        # widens the floor so a conda-forge build exists for python 3.13/3.14.
+        - bcrypt >=4.3.0,<6.0.0
         - pillow >=12.1.1,<13.0.0
         - docstring_parser >=0.16,<1.0.0
         - pyjwt >=2.12.1
@@ -378,6 +392,10 @@ outputs:
         - langgraph-checkpoint >4.0.0,<5.0.0
         - transformers >=5.6.0,<6.0.0
       run_constraints:
+        # See the same constraint on the lfx output: markitdown (pulled in
+        # transitively via lfx) forces in an ancient msal-extensions build
+        # that conflicts with newer portalocker and fails pip_check.
+        - msal_extensions >=1.2.0
         - gunicorn >=25.3.0,<27.0.0
         - langchain-mongodb >=0.11.0
         - langchain-perplexity >=1.0.0,<2.0.0
@@ -394,6 +412,17 @@ outputs:
           pip_check: true
           python_version:
             - ${{ python_min }}.*
+            - "3.14.*"
+      - script:
+          # Exercises the actual password-hashing path (passlib's bcrypt backend)
+          # that patches/0004-bcrypt-passlib-py314-compat.patch fixes -- import-only
+          # checks wouldn't catch this, since passlib loads its bcrypt backend lazily
+          # on first hash()/verify() call, e.g. when the default superuser account
+          # is created on server startup.
+          - python -c "from lfx.services.settings.auth import AuthSettings; s = AuthSettings(CONFIG_DIR=''); h = s.pwd_context.hash('t'); assert s.pwd_context.verify('t', h); assert not s.pwd_context.verify('wrong', h)"
+        requirements:
+          run:
+            - python 3.14.*
       - package_contents:
           site_packages:
             - langflow/frontend/index.html
@@ -418,6 +447,10 @@ outputs:
         - python >=${{ python_min }},<3.15
         - ${{ pin_subpackage('langflow-base', exact=True) }}
       run_constraints:
+        # See the same constraint on the lfx output: markitdown (pulled in
+        # transitively via lfx) forces in an ancient msal-extensions build
+        # that conflicts with newer portalocker and fails pip_check.
+        - msal_extensions >=1.2.0
         - fastmcp >=3.2.0
         - lark ==1.2.2
         - sseclient-py ==1.8.0
@@ -474,6 +507,7 @@ outputs:
           pip_check: true
           python_version:
             - ${{ python_min }}.*
+            - "3.14.*"
 
 about:
   homepage: https://github.com/langflow-ai/langflow
